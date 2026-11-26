@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: medwaste-db
+    environment:
+      POSTGRES_DB: medwaste
+      POSTGRES_USER: medwaste
+      POSTGRES_PASSWORD: medwaste
+    ports:
+      - "5433:5432"            # 宿主 5433，避免与本机已装 PostgreSQL 5432 冲突
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medwaste -d medwaste"]
+      interval: 5s
+      timeout: 4s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+    container_name: medwaste-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/medwaste
+      SPRING_DATASOURCE_USERNAME: medwaste
+      SPRING_DATASOURCE_PASSWORD: medwaste
+      SERVER_PORT: "8080"
+      APP_WEIGHT_TOLERANCE_KG: "0.5"
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: medwaste-frontend
+    depends_on:
+      - backend
+    ports:
+      - "8088:80"              # 浏览器访问 http://localhost:8088
+
+volumes:
+  pgdata:
