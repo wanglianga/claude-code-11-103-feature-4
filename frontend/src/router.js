@@ -7,6 +7,7 @@ const routes = [
   { path: '/hospital', component: () => import('./pages/Hospital.vue'), meta: { roles: ['HOSPITAL', 'ADMIN'], title: '医院工作台' } },
   { path: '/transport', component: () => import('./pages/Transport.vue'), meta: { roles: ['TRANSPORTER', 'ADMIN'], title: '收运工作台' } },
   { path: '/plant', component: () => import('./pages/Plant.vue'), meta: { roles: ['PLANT', 'ADMIN'], title: '处置厂工作台' } },
+  { path: '/zone', component: () => import('./pages/Zone.vue'), meta: { title: '跨区派发与防护' } },
   { path: '/manifest/:code', component: () => import('./pages/ManifestDetail.vue'), meta: { title: '交接单详情' } },
   { path: '/discrepancies', component: () => import('./pages/Discrepancies.vue'), meta: { title: '差异中心' } },
   { path: '/simulator', component: () => import('./pages/Simulator.vue'), meta: { title: '硬件/回执模拟器' } },

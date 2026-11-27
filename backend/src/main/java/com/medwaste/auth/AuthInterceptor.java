@@ -26,6 +26,11 @@ public class AuthInterceptor implements HandlerInterceptor {
                 || path.equals("/api/meta/health")) {
             return true;
         }
+        // feature-4 跨区现场总览为只读看板（与公开追踪一致），GET 放行；基线重置也允许直接调用以便重复验收
+        if (("GET".equalsIgnoreCase(request.getMethod()) && path.startsWith("/api/zone"))
+                || ("POST".equalsIgnoreCase(request.getMethod()) && path.equals("/api/zone/reset"))) {
+            return true;
+        }
         AppUser user = null;
         String authHeader = request.getHeader("Authorization");
         if (authHeader != null) user = auth.resolveToken(authHeader);

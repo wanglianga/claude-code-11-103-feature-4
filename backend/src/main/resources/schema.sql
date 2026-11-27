@@ -340,3 +340,200 @@ CREATE TABLE IF NOT EXISTS box_returns (
   by_name              VARCHAR(60),
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ============================================================================
+-- 跨区人员任务与防护用品（feature-4）
+-- 区域（净区 CLEAN / 污染区 DIRTY / 转换通道 TRANSITION）、流程卡、独立复核、
+-- 防护用品套件与库存全部为随题虚构，不推断任何真实卫生规范。
+-- 设计要点：岗位资质、实际所在区域、当前污染状态、本次防护用品分别保存；
+-- 每进入一次污染区产生独立一轮 zone_rounds，只有“本轮流程卡 + 独立复核 +
+-- 关键退出回执”全部通过才恢复净区资格；旧的清洁/已复核轮次不能覆盖新进入事实。
+-- ============================================================================
+
+-- 跨区仿真全局设置（单行）：模拟时钟与转换耗时
+CREATE TABLE IF NOT EXISTS zone_settings (
+  id              INT PRIMARY KEY DEFAULT 1,
+  base_date       DATE NOT NULL DEFAULT DATE '2026-11-27',
+  clock_min       INT NOT NULL DEFAULT 600,   -- 模拟当前时刻（自午夜分钟，600=10:00）
+  transition_min  INT NOT NULL DEFAULT 10,    -- 题例：退出流程 + 独立复核共 10 分钟
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT zone_settings_singleton CHECK (id = 1)
+);
+
+-- 跨区人员：岗位能力(quals) / 固定分区倾向(post_zone) / 实际区域 / 污染状态 / 净区资格分列
+CREATE TABLE IF NOT EXISTS zone_staff (
+  id                BIGSERIAL PRIMARY KEY,
+  code              VARCHAR(40) UNIQUE NOT NULL,   -- W1 / W2 / RV
+  name              VARCHAR(60) NOT NULL,
+  username          VARCHAR(40),                   -- 关联登录账号（独立复核身份用，可空）
+  post_zone         VARCHAR(10) NOT NULL DEFAULT 'FLOAT', -- CLEAN / DIRTY / FLOAT（分守倾向，非硬限制）
+  quals             JSONB NOT NULL DEFAULT '[]'::jsonb,    -- 仍有效的岗位能力标签
+  can_review        BOOLEAN NOT NULL DEFAULT FALSE,
+  active            BOOLEAN NOT NULL DEFAULT TRUE,
+  actual_zone       VARCHAR(10) NOT NULL DEFAULT 'CLEAN',  -- 当前实际所在：CLEAN / DIRTY / TRANSITION
+  contam_state      VARCHAR(30) NOT NULL DEFAULT 'CLEAN',
+  clean_eligible    BOOLEAN NOT NULL DEFAULT TRUE,         -- 当前是否允许接触净区物品（派发硬前提）
+  current_round_id  BIGINT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 跨区任务定义 + 当前派工/锁定段（A 净区供箱 / P 污染区交接 / C 净区检查 …）
+CREATE TABLE IF NOT EXISTS zone_tasks (
+  id                  BIGSERIAL PRIMARY KEY,
+  code                VARCHAR(40) UNIQUE NOT NULL,
+  title               VARCHAR(120) NOT NULL,
+  zone_req            VARCHAR(10) NOT NULL,       -- CLEAN / DIRTY
+  duration_min        INT NOT NULL,
+  release_min         INT,                          -- 最早可开始时刻（分钟）
+  deadline_min        INT,                          -- 完成截止时刻（分钟，C=660 即 11:00）
+  depends_on          JSONB NOT NULL DEFAULT '[]'::jsonb, -- 必须先 DONE 的前置任务 code
+  required_quals      JSONB NOT NULL DEFAULT '[]'::jsonb,
+  kit_code            VARCHAR(40),                  -- DIRTY 任务进入前需领/核销的防护套件
+  status              VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+  -- OPEN / CONFIRMED(已确认并锁定人员可用段+用品) / IN_PROGRESS / DONE / CANCELLED
+  assignee_code       VARCHAR(40),
+  start_min           INT,                          -- 锁定可用段起点
+  end_min             INT,                          -- 锁定可用段终点（半开区间，首尾相接不算冲突）
+  actual_start_min    INT,
+  actual_end_min      INT,
+  reservation_code    VARCHAR(40),
+  confirmed_by        VARCHAR(60),
+  confirmed_at_min    INT,
+  started_by          VARCHAR(60),
+  started_at_min      INT,
+  completed_by        VARCHAR(60),
+  completed_at_min    INT,
+  cancel_reason       VARCHAR(400),
+  cancelled_by        VARCHAR(60),
+  cancelled_at_min    INT,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_zone_tasks_assignee ON zone_tasks(assignee_code);
+CREATE INDEX IF NOT EXISTS idx_zone_tasks_status ON zone_tasks(status);
+
+-- 污染区进入轮次（每进一次污染区一行，只追加事实；取消任务也不删除）
+CREATE TABLE IF NOT EXISTS zone_rounds (
+  id                     BIGSERIAL PRIMARY KEY,
+  code                   VARCHAR(40) UNIQUE NOT NULL,  -- ZR-XXXXXXXX
+  staff_code             VARCHAR(40) NOT NULL,
+  round_no               INT NOT NULL,
+  task_code              VARCHAR(40),
+  status                 VARCHAR(24) NOT NULL DEFAULT 'IN_DIRTY',
+  -- IN_DIRTY / EXITED / CARD_IN_PROGRESS / CHECK_FAILED / REVIEW_PENDING /
+  -- REVIEW_FAILED / AWAIT_RECEIPT / CLEARED
+  entry_min              INT,
+  exit_min               INT,
+  cleared_min            INT,
+  exit_receipt_status    VARCHAR(10) NOT NULL DEFAULT 'UNKNOWN', -- UNKNOWN(关键回执未知/迟到) / KNOWN
+  exit_receipt_code      VARCHAR(60),
+  exit_receipt_min       INT,
+  receipt_late           BOOLEAN NOT NULL DEFAULT FALSE,
+  card_status            VARCHAR(20) NOT NULL DEFAULT 'NOT_STARTED',
+  -- NOT_STARTED / IN_PROGRESS / PASSED / FAILED / INTERRUPTED
+  check_status           VARCHAR(10) NOT NULL DEFAULT 'PENDING',  -- PENDING / PASS / FAIL
+  review_status          VARCHAR(10) NOT NULL DEFAULT 'PENDING',  -- PENDING / PASS / FAIL
+  reviewer_code          VARCHAR(40),
+  reviewer_name          VARCHAR(60),
+  reviewer_username      VARCHAR(40),
+  reviewed_min           INT,
+  review_note            VARCHAR(400),
+  kit_code               VARCHAR(40),
+  reservation_code       VARCHAR(40),
+  kit_lines              JSONB,
+  entry_actor            VARCHAR(60),
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(staff_code, round_no)
+);
+CREATE INDEX IF NOT EXISTS idx_zone_rounds_staff ON zone_rounds(staff_code);
+
+-- 本轮流程卡步骤办理记录（模板见 zone_card_template）
+CREATE TABLE IF NOT EXISTS zone_round_steps (
+  id            BIGSERIAL PRIMARY KEY,
+  round_id      BIGINT NOT NULL,
+  step_code     VARCHAR(40) NOT NULL,
+  seq           INT NOT NULL,
+  label         VARCHAR(160) NOT NULL,
+  inspection    BOOLEAN NOT NULL DEFAULT FALSE,
+  status        VARCHAR(15) NOT NULL DEFAULT 'PENDING', -- PENDING / DONE / FAILED / INTERRUPTED
+  passed        BOOLEAN,
+  note          VARCHAR(400),
+  actor         VARCHAR(60),
+  at_min        INT,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_zone_steps_round ON zone_round_steps(round_id);
+
+-- 虚构流程卡模板
+CREATE TABLE IF NOT EXISTS zone_card_template (
+  step_code     VARCHAR(40) PRIMARY KEY,
+  seq           INT NOT NULL,
+  label         VARCHAR(160) NOT NULL,
+  inspection    BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- 防护用品 SKU 库存（on_hand=现场实物；HELD 预留另计；进入污染区才真正扣减 on_hand）
+CREATE TABLE IF NOT EXISTS zone_ppe_sku (
+  id            BIGSERIAL PRIMARY KEY,
+  sku_code      VARCHAR(40) UNIQUE NOT NULL,
+  name          VARCHAR(120) NOT NULL,
+  unit          VARCHAR(10) NOT NULL DEFAULT '件',
+  on_hand       INT NOT NULL DEFAULT 0,
+  safety_stock  INT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS zone_ppe_kit (
+  code          VARCHAR(40) PRIMARY KEY,
+  name          VARCHAR(120) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS zone_ppe_kit_line (
+  id            BIGSERIAL PRIMARY KEY,
+  kit_code      VARCHAR(40) NOT NULL,
+  sku_code      VARCHAR(40) NOT NULL,
+  qty           INT NOT NULL,
+  UNIQUE(kit_code, sku_code)
+);
+
+-- 防护用品预留/核销单：确认任务=HELD 锁定；进入污染区=CONSUMED 实耗；
+-- 未进入即取消=RELEASED 退回可用；已 CONSUMED 不允许退回。
+CREATE TABLE IF NOT EXISTS zone_ppe_reservation (
+  id              BIGSERIAL PRIMARY KEY,
+  code            VARCHAR(40) UNIQUE NOT NULL,
+  task_code       VARCHAR(40),
+  staff_code      VARCHAR(40) NOT NULL,
+  kit_code        VARCHAR(40) NOT NULL,
+  status          VARCHAR(12) NOT NULL DEFAULT 'HELD', -- HELD / CONSUMED / RELEASED
+  lines           JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_min     INT,
+  consumed_min    INT,
+  released_min    INT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_zone_res_task ON zone_ppe_reservation(task_code);
+
+-- 只记录真正引起 on_hand 变动的库存流水：RECEIVE 补货 / ADJUST 盘点调整 / CONSUME 进区实耗
+CREATE TABLE IF NOT EXISTS zone_ppe_txn (
+  id            BIGSERIAL PRIMARY KEY,
+  sku_code      VARCHAR(40) NOT NULL,
+  change_qty    INT NOT NULL,
+  txn_type      VARCHAR(12) NOT NULL,
+  reason        VARCHAR(400),
+  task_code     VARCHAR(40),
+  at_min        INT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_zone_tx_sku ON zone_ppe_txn(sku_code);
+
+-- 跨区现场只追加事件（进入/退出/流程/复核/回执/派工/取消…，取消任务不抹除进区事实）
+CREATE TABLE IF NOT EXISTS zone_events (
+  id            BIGSERIAL PRIMARY KEY,
+  at_min        INT,
+  at_real       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  staff_code    VARCHAR(40),
+  task_code     VARCHAR(40),
+  round_code    VARCHAR(40),
+  action        VARCHAR(50) NOT NULL,
+  actor_name    VARCHAR(60),
+  detail        VARCHAR(600)
+);
+CREATE INDEX IF NOT EXISTS idx_zone_events_staff ON zone_events(staff_code);

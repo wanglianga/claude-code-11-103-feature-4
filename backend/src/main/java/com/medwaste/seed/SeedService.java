@@ -1,6 +1,7 @@
 package com.medwaste.seed;
 
 import com.medwaste.common.Db;
+import com.medwaste.zone.ZoneSeed;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.annotation.Order;
@@ -18,9 +19,11 @@ import java.util.Map;
 @Order(10)
 public class SeedService implements ApplicationRunner {
     private final Db db;
+    private final ZoneSeed zoneSeed;
 
-    public SeedService(Db db) {
+    public SeedService(Db db, ZoneSeed zoneSeed) {
         this.db = db;
+        this.zoneSeed = zoneSeed;
     }
 
     @Override
@@ -40,6 +43,8 @@ public class SeedService implements ApplicationRunner {
                 RESTART IDENTITY CASCADE
                 """);
         seed();
+        // 跨区特性基线（W1/W2/RV、A/P/C、流程卡、防护用品）随全局重置一并重建
+        zoneSeed.resetZone();
     }
 
     private long org(String code, String name, String type) {
@@ -79,6 +84,11 @@ public class SeedService implements ApplicationRunner {
         user("shunda01", "123456", "钱顺", "TRANSPORTER", t2, "收运员");
         user("plant01", "123456", "陈实", "PLANT", p1, "处置厂核实员");
         user("plant02", "123456", "林工", "PLANT", p1, "处置车间操作员");
+
+        // ---------- feature-4 跨区派发：W1/W2 与独立复核员（密码均 123456） ----------
+        user("w1", "123456", "W1·卫一", "HOSPITAL", h1, "跨区收运/供箱员 W1");
+        user("w2", "123456", "W2·卫二", "HOSPITAL", h1, "跨区收运/污染交接员 W2");
+        user("rv01", "123456", "周正", "HOSPITAL", h1, "独立复核员/值班主管");
 
         // ---------- 虚构机构资质 ----------
         qual(h1, "YG-XK-2026-0001", "医疗机构执业许可证（虚构）", "全部虚构医废类别",

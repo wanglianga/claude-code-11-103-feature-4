@@ -14,6 +14,7 @@
         <el-menu-item v-if="can('HOSPITAL')" index="/hospital"><el-icon><OfficeBuilding /></el-icon>医院端</el-menu-item>
         <el-menu-item v-if="can('TRANSPORTER')" index="/transport"><el-icon><Van /></el-icon>收运端</el-menu-item>
         <el-menu-item v-if="can('PLANT')" index="/plant"><el-icon><SetUp /></el-icon>处置厂端</el-menu-item>
+        <el-menu-item index="/zone"><el-icon><Switch /></el-icon>跨区派发/防护</el-menu-item>
         <el-menu-item index="/discrepancies"><el-icon><Warning /></el-icon>差异中心</el-menu-item>
         <el-menu-item index="/simulator"><el-icon><Cpu /></el-icon>模拟器</el-menu-item>
         <el-menu-item index="/acceptance"><el-icon><CircleCheck /></el-icon>验收自检</el-menu-item>

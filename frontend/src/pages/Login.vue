@@ -25,6 +25,17 @@
             <el-button size="small" type="primary" plain :loading="loading===a.username">进入</el-button>
           </div>
         </div>
+        <div class="zone-acct-head">跨区派发 / 独立复核（feature-4，密码 123456）</div>
+        <div class="acct-list">
+          <div v-for="a in zoneAccounts" :key="a.username" class="acct" @click="login(a.username)">
+            <el-tag :type="zoneTag(a.username)" size="small">{{ zoneRole(a.username) }}</el-tag>
+            <div class="acct-main">
+              <div class="acct-name">{{ a.label }}</div>
+              <div class="muted mono">{{ a.username }} / {{ a.password }}</div>
+            </div>
+            <el-button size="small" type="warning" plain :loading="loading===a.username">进入</el-button>
+          </div>
+        </div>
         <el-divider>或手动登录</el-divider>
         <el-form @submit.prevent>
           <el-form-item><el-input v-model="username" placeholder="用户名" size="large" /></el-form-item>
@@ -45,6 +56,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api, setSession } from '../api.js'
 import { DEMO_ACCOUNTS } from '../verify/scenarios.mjs'
+import { ZONE_ACCOUNTS } from '../verify/zoneScenarios.mjs'
 
 const router = useRouter()
 const route = useRoute()
@@ -57,9 +69,15 @@ const ROLE_NAME = { hospital01: '医院', hospital02: '医院', kangning01: '医
 const role = (u) => ROLE_NAME[u] || '用户'
 const tag = (u) => ({ 医院: 'success', 收运: 'primary', 处置厂: 'warning', 管理员: 'danger' }[role(u)])
 
+const zoneAccounts = ZONE_ACCOUNTS
+const ZONE_ROLE = { w1: '跨区员', w2: '跨区员', rv01: '独立复核', admin: '主管' }
+const zoneRole = (u) => ZONE_ROLE[u] || '跨区'
+const zoneTag = (u) => ({ 跨区员: 'primary', 独立复核: 'warning', 主管: 'danger' }[zoneRole(u)] || 'info')
+
 async function login(presetUser) {
   const u = presetUser ? presetUser : username.value
-  const p = presetUser ? (DEMO_ACCOUNTS.find(a => a.username === u)?.password || '123456') : password.value
+  const known = [...DEMO_ACCOUNTS, ...ZONE_ACCOUNTS]
+  const p = presetUser ? (known.find(a => a.username === u)?.password || '123456') : password.value
   loading.value = u
   try {
     const r = await api.post('/auth/login', { username: u, password: p })
@@ -67,6 +85,7 @@ async function login(presetUser) {
     ElMessage.success(`欢迎，${r.user.displayName}`)
     const redirect = route.query.redirect
     if (redirect && typeof redirect === 'string') router.push(redirect)
+    else if (['w1', 'w2', 'rv01'].includes(u)) router.push('/zone')
     else router.push(homeFor(r.user.role))
   } catch (e) {
     ElMessage.error(e.message)
@@ -90,6 +109,8 @@ function homeFor(role) {
 .right { padding: 36px 38px; }
 .right h2 { margin: 0 0 18px; font-size: 19px; }
 .acct-list { display: grid; gap: 9px; margin-bottom: 8px; max-height: 330px; overflow: auto; padding-right: 4px; }
+.zone-acct-head { font-size: 12px; font-weight: 700; color: #b45309; margin: 10px 0 6px; }
+.zone-acct-head + .acct-list { max-height: none; }
 .acct { display: flex; align-items: center; gap: 11px; border: 1px solid #e5e7eb; border-radius: 10px; padding: 9px 12px; cursor: pointer; transition: .15s; }
 .acct:hover { border-color: #0f766e; background: #f0fdfa; transform: translateY(-1px); }
 .acct-main { flex: 1; min-width: 0; }
